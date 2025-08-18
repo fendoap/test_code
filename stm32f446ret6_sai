@@ -1,0 +1,501 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2025 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <string.h>
+#include <math.h>
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+#define CODEC_RST_GPIO_Port GPIOC
+#define CODEC_RST_Pin       GPIO_PIN_4
+#define SGTL5000_I2C_ADDR (0x0A << 1)  // 20pin版固定
+// レジスタアドレス（16bit）
+#define CHIP_ID            0x0000
+#define CHIP_DIG_POWER     0x0002
+#define CHIP_CLK_CTRL      0x0004
+#define CHIP_I2S_CTRL      0x0006
+#define CHIP_SSS_CTRL      0x000A
+#define CHIP_ADCDAC_CTRL   0x000E
+#define CHIP_DAC_VOL       0x0010
+#define CHIP_ANA_ADC_CTRL  0x0020
+#define CHIP_ANA_HP_CTRL   0x0022
+#define CHIP_ANA_CTRL      0x0024
+#define CHIP_LINREG_CTRL   0x0026
+#define CHIP_REF_CTRL      0x0028
+#define CHIP_MIC_CTRL      0x002A
+#define CHIP_LINE_OUT_CTRL 0x002C
+#define CHIP_LINE_OUT_VOL  0x002E
+#define CHIP_ANA_POWER     0x0030
+#define CHIP_PLL_CTRL      0x0032
+#define CHIP_CLK_TOP_CTRL  0x0034
+#define CHIP_SHORT_CTRL    0x003C
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+static inline uint32_t pack24(int32_t s) {
+    return (uint32_t)((s & 0x00FFFFFF) << 8);
+}
+
+
+
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+SAI_HandleTypeDef hsai_BlockA1;
+SAI_HandleTypeDef hsai_BlockB1;
+DMA_HandleTypeDef hdma_sai1_a;
+DMA_HandleTypeDef hdma_sai1_b;
+
+/* USER CODE BEGIN PV */
+
+
+
+
+
+#define AUDIO_WORDS   256                // 32-bit words
+#define FS_HZ         48000.0f
+#define TONE_HZ       1000.0f
+__attribute__((aligned(4))) static uint32_t rxBuf[AUDIO_WORDS];
+__attribute__((aligned(4))) static uint32_t txBuf[AUDIO_WORDS];
+
+void SGTL5000_WriteReg(uint16_t reg, uint16_t val) {
+    uint8_t buf[4];
+    buf[0] = (reg >> 8) & 0xFF;
+    buf[1] = reg & 0xFF;
+    buf[2] = (val >> 8) & 0xFF;
+    buf[3] = val & 0xFF;
+    HAL_I2C_Master_Transmit(&hi2c1, SGTL5000_I2C_ADDR, buf, 4, HAL_MAX_DELAY);
+}
+
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+void PeriphCommonClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
+static void MX_SAI1_Init(void);
+static void MX_I2C1_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* Configure the peripherals common clocks */
+  PeriphCommonClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_SAI1_Init();
+  MX_I2C1_Init();
+  /* USER CODE BEGIN 2 */
+
+
+  memset(txBuf, 0, sizeof(txBuf));
+  memset(rxBuf, 0, sizeof(rxBuf));
+  HAL_Delay(5);
+
+  // VDDD内部生成（3.1V以下想定、低電圧起動手順）
+  SGTL5000_WriteReg(CHIP_LINREG_CTRL, 0x0008);
+  SGTL5000_WriteReg(CHIP_ANA_POWER,   0x7260);
+  SGTL5000_WriteReg(CHIP_CLK_TOP_CTRL,0x0800);
+  SGTL5000_WriteReg(CHIP_ANA_POWER, 0x4AFF);
+  // VAG/LINEOUT設定
+  SGTL5000_WriteReg(CHIP_REF_CTRL,     0x004E); // VAG=VDDA/2
+  SGTL5000_WriteReg(CHIP_REF_CTRL,     0x004F); // SMALL_POP=1
+  SGTL5000_WriteReg(CHIP_LINE_OUT_CTRL,0x0322);
+  // クロック設定: Fs=48kHz, MCLK=256Fs
+  SGTL5000_WriteReg(CHIP_CLK_CTRL,     0x0008);
+  // I²Sフォーマット: 標準I²S, 32bit, LRCLK左先頭
+  SGTL5000_WriteReg(CHIP_I2S_CTRL,     0x0130);
+  // デジタルブロック電源: ADC/DAC/I²S IN/OUT全部ON
+  // bit0=ADC, bit1=DAC, bit4=I2S_OUT, bit5=I2S_IN, bit6=DAP(必要なら)
+  SGTL5000_WriteReg(CHIP_DIG_POWER,    0x0073);
+  // --- 入力・出力指定 ---
+    // bits[2:0]   = ADC入力選択: 0x4=LINEIN, 0x0=MIC
+    // bits[5:4]   = HP出力選択:  0x0=DAC
+    // bits[7:6]   = LINEOUT出力: 0x0=DAC
+    // 他ビット   = デフォルト
+   SGTL5000_WriteReg(CHIP_ANA_CTRL, 0x0026);
+  // ルーティング:
+  // bits[1:0]=I2S_SELECT=ADC(0), bits[5:4]=DAC_SELECT=I2S_IN(1)
+  SGTL5000_WriteReg(CHIP_SSS_CTRL,     0x0010);
+  // ADC/DAC制御: ミュート解除、HPF有効
+  SGTL5000_WriteReg(CHIP_ADCDAC_CTRL,  0x0000);
+  SGTL5000_WriteReg(CHIP_ANA_ADC_CTRL, 0x0000); // ADCゲイン 0dB
+  SGTL5000_WriteReg(CHIP_MIC_CTRL,     0x0000); // MICゲイン 0dB（MIC未使用時）
+  SGTL5000_WriteReg(CHIP_ANA_HP_CTRL,  0x1818); // HP左右 0dB
+  SGTL5000_WriteReg(CHIP_LINE_OUT_VOL, 0x1818); // LINEOUT左右 0dB
+  // DAC音量
+  SGTL5000_WriteReg(CHIP_DAC_VOL,      0x3C3C);
+  // （必要に応じて）HPやLINEOUTのアナログ音量も設定
+  // SGTL5000_WriteReg(CHIP_ANA_HP_CTRL,  0x1818);
+
+
+
+
+
+  HAL_SAI_Receive_DMA(&hsai_BlockA1, (uint8_t*)rxBuf, AUDIO_WORDS);
+  HAL_SAI_Transmit_DMA(&hsai_BlockB1, (uint8_t*)txBuf, AUDIO_WORDS);
+
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+
+
+  }
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 16;
+  RCC_OscInitStruct.PLL.PLLN = 180;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief Peripherals Common Clock Configuration
+  * @retval None
+  */
+void PeriphCommonClock_Config(void)
+{
+  RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};
+
+  /** Initializes the peripherals clock
+  */
+  PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_SAI1;
+  PeriphClkInitStruct.PLLSAI.PLLSAIM = 15;
+  PeriphClkInitStruct.PLLSAI.PLLSAIN = 363;
+  PeriphClkInitStruct.PLLSAI.PLLSAIQ = 3;
+  PeriphClkInitStruct.PLLSAI.PLLSAIP = RCC_PLLSAIP_DIV2;
+  PeriphClkInitStruct.PLLSAIDivQ = 7;
+  PeriphClkInitStruct.Sai1ClockSelection = RCC_SAI1CLKSOURCE_PLLSAI;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SAI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SAI1_Init(void)
+{
+
+  /* USER CODE BEGIN SAI1_Init 0 */
+
+  /* USER CODE END SAI1_Init 0 */
+
+  /* USER CODE BEGIN SAI1_Init 1 */
+
+  /* USER CODE END SAI1_Init 1 */
+  hsai_BlockA1.Instance = SAI1_Block_A;
+  hsai_BlockA1.Init.AudioMode = SAI_MODESLAVE_RX;
+  hsai_BlockA1.Init.Synchro = SAI_SYNCHRONOUS;
+  hsai_BlockA1.Init.OutputDrive = SAI_OUTPUTDRIVE_DISABLE;
+  hsai_BlockA1.Init.FIFOThreshold = SAI_FIFOTHRESHOLD_HF;
+  hsai_BlockA1.Init.SynchroExt = SAI_SYNCEXT_OUTBLOCKB_ENABLE;
+  hsai_BlockA1.Init.MonoStereoMode = SAI_STEREOMODE;
+  hsai_BlockA1.Init.CompandingMode = SAI_NOCOMPANDING;
+  hsai_BlockA1.Init.TriState = SAI_OUTPUT_NOTRELEASED;
+  if (HAL_SAI_InitProtocol(&hsai_BlockA1, SAI_I2S_STANDARD, SAI_PROTOCOL_DATASIZE_32BIT, 2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  hsai_BlockB1.Instance = SAI1_Block_B;
+  hsai_BlockB1.Init.AudioMode = SAI_MODEMASTER_TX;
+  hsai_BlockB1.Init.Synchro = SAI_ASYNCHRONOUS;
+  hsai_BlockB1.Init.OutputDrive = SAI_OUTPUTDRIVE_DISABLE;
+  hsai_BlockB1.Init.NoDivider = SAI_MASTERDIVIDER_ENABLE;
+  hsai_BlockB1.Init.FIFOThreshold = SAI_FIFOTHRESHOLD_HF;
+  hsai_BlockB1.Init.ClockSource = SAI_CLKSOURCE_NA;
+  hsai_BlockB1.Init.AudioFrequency = SAI_AUDIO_FREQUENCY_48K;
+  hsai_BlockB1.Init.SynchroExt = SAI_SYNCEXT_OUTBLOCKB_ENABLE;
+  hsai_BlockB1.Init.MonoStereoMode = SAI_STEREOMODE;
+  hsai_BlockB1.Init.CompandingMode = SAI_NOCOMPANDING;
+  hsai_BlockB1.Init.TriState = SAI_OUTPUT_NOTRELEASED;
+  if (HAL_SAI_InitProtocol(&hsai_BlockB1, SAI_I2S_STANDARD, SAI_PROTOCOL_DATASIZE_32BIT, 2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SAI1_Init 2 */
+
+  /* USER CODE END SAI1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Stream1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream1_IRQn);
+  /* DMA2_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream4_IRQn);
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+/* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PA5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC4 */
+  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+/* USER CODE BEGIN MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+// 受信割り込みで対応ハーフをそのまま送信用バッファへコピー
+// 受信バッファ前半を受信したら送信バッファ前半にコピー
+// 任意の信号処理関数（ここでADCデータを加工）
+static inline uint32_t process_sample(uint32_t in)
+{
+    // 例: 単純にそのまま返す（パススルー）
+    return in;
+}
+
+// 受信バッファ前半→送信バッファ前半
+void HAL_SAI_RxHalfCpltCallback(SAI_HandleTypeDef *h)
+{
+    if (h->Instance == SAI1_Block_A)
+    {
+        for (int i = 0; i < AUDIO_WORDS/2; i++)
+            txBuf[i] = process_sample(rxBuf[i]);
+    }
+}
+
+// 受信バッファ後半→送信バッファ後半
+void HAL_SAI_RxCpltCallback(SAI_HandleTypeDef *h)
+{
+    if (h->Instance == SAI1_Block_A)
+    {
+        for (int i = AUDIO_WORDS/2; i < AUDIO_WORDS; i++)
+            txBuf[i] = process_sample(rxBuf[i]);
+    }
+}
+
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
