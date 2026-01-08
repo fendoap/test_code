@@ -17,6 +17,7 @@ TICKS_PER_BEAT = 480
 BPM = 120
 BARS = 90
 BEATS_PER_BAR = 4
+MIN_NOTE_TICKS = TICKS_PER_BEAT // 4
 DEFAULT_KEY = "C"
 DEFAULT_MODE = "major"
 
@@ -121,6 +122,10 @@ def clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def ensure_min_duration(ticks: int) -> int:
+    return max(ticks, MIN_NOTE_TICKS)
+
+
 def choose_voicing(chord: Chord, prev: Sequence[int] | None) -> List[int]:
     pcs = chord_pitch_classes(chord)
     if len(pcs) < 4:
@@ -215,6 +220,62 @@ def tonicize_block(key_root: int, target_degree: int, mode: str) -> List[Chord]:
     return chords
 
 
+FUNCTION_TRANSITIONS = {
+    "T": (["T", "PD", "CT"], [0.35, 0.5, 0.15]),
+    "PD": (["D", "CT", "PD"], [0.55, 0.25, 0.2]),
+    "D": (["T", "CT"], [0.8, 0.2]),
+    "CT": (["PD", "D", "T"], [0.4, 0.4, 0.2]),
+}
+
+
+def choose_next_function(current: str, rng: random.Random) -> str:
+    options, weights = FUNCTION_TRANSITIONS[current]
+    return rng.choices(options, weights=weights, k=1)[0]
+
+
+def pick_tonic_chord(key_root: int, mode: str, rng: random.Random, duration: int) -> Chord:
+    options = [
+        build_chord("I", diatonic_degree(key_root, 1, mode), "maj7", ["9", "13"], ["T"], duration),
+        build_chord("I", diatonic_degree(key_root, 1, mode), "6/9", [], ["T"], duration),
+        build_chord("I", diatonic_degree(key_root, 1, mode), "add9", [], ["T"], duration),
+        build_chord("vi", diatonic_degree(key_root, 6, mode), "m7", ["9"], ["T"], duration),
+        build_chord("iii", diatonic_degree(key_root, 3, mode), "m7", ["9"], ["T"], duration),
+    ]
+    return rng.choice(options)
+
+
+def pick_predominant_chord(key_root: int, mode: str, rng: random.Random, duration: int) -> Chord:
+    options = [
+        build_chord("ii", diatonic_degree(key_root, 2, mode), "m7", ["11"], ["PD"], duration),
+        build_chord("IV", diatonic_degree(key_root, 4, mode), "maj7", ["9"], ["PD"], duration),
+        build_chord("ii", diatonic_degree(key_root, 2, mode), "m7b5", ["11"], ["PD"], duration),
+        borrowed_chord(key_root, "iv", (key_root + 5) % 12, "m7", duration),
+        borrowed_chord(key_root, "bVI", (key_root + 8) % 12, "maj7", duration),
+    ]
+    return rng.choice(options)
+
+
+def pick_dominant_chord(key_root: int, mode: str, rng: random.Random, duration: int) -> Chord:
+    target_degree = rng.choice([2, 5, 6])
+    options = [
+        build_chord("V", diatonic_degree(key_root, 5, mode), "7", ["9"], ["D"], duration),
+        build_chord("V", diatonic_degree(key_root, 5, mode), "7", ["b9", "#9"], ["D", "ALT"], duration),
+        secondary_dominant(key_root, target_degree, mode, altered=rng.random() < 0.7, duration=duration),
+        tritone_sub(key_root, target_degree, mode, duration=duration),
+    ]
+    return rng.choice(options)
+
+
+def pick_chromatic_chord(key_root: int, mode: str, rng: random.Random, duration: int) -> Chord:
+    options = [
+        borrowed_chord(key_root, "bVII", (key_root + 10) % 12, "7", duration),
+        borrowed_chord(key_root, "bIII", (key_root + 3) % 12, "maj7", duration),
+        borrowed_chord(key_root, "bVI", (key_root + 8) % 12, "maj7", duration),
+        dim_passing(key_root, "#ivo7", (key_root + 6) % 12, duration),
+    ]
+    return rng.choice(options)
+
+
 def generate_section(
     section: str,
     length: int,
@@ -225,28 +286,29 @@ def generate_section(
 ) -> List[Chord]:
     chords: List[Chord] = []
     bar = 0
+    function_state = "T"
     while bar < length:
         use_two_beat = section in {"B", "Chorus", "Chorus'"} and rng.random() < 0.6
         if include_tonicize and bar == 4:
             chords.extend(tonicize_block(key_root, 5, mode))
             bar += 4
+            function_state = "T"
             continue
         if use_two_beat and bar + 1 <= length:
-            chords.append(secondary_dominant(key_root, 2, mode, altered=True, duration=2))
-            chords.append(build_chord("ii", diatonic_degree(key_root, 2, mode), "m7", ["11"], ["PD"], 2))
+            chords.append(pick_predominant_chord(key_root, mode, rng, duration=2))
+            chords.append(pick_dominant_chord(key_root, mode, rng, duration=2))
+            function_state = "T"
         else:
-            choices = [
-                build_chord("I", diatonic_degree(key_root, 1, mode), "maj7", ["9", "13"], ["T"], 4),
-                build_chord("vi", diatonic_degree(key_root, 6, mode), "m7", ["9"], ["T"], 4),
-                build_chord("IV", diatonic_degree(key_root, 4, mode), "maj7", ["9"], ["PD"], 4),
-                build_chord("ii", diatonic_degree(key_root, 2, mode), "m7", ["11"], ["PD"], 4),
-                secondary_dominant(key_root, 6, mode, altered=rng.random() < 0.7, duration=4),
-                tritone_sub(key_root, 5, mode, duration=4),
-                borrowed_chord(key_root, "bVII", (key_root + 10) % 12, "7", 4),
-                borrowed_chord(key_root, "iv", (key_root + 5) % 12, "m7", 4),
-                dim_passing(key_root, "#ivo7", (key_root + 6) % 12, 4),
-            ]
-            chords.append(rng.choice(choices))
+            if function_state == "T":
+                chord = pick_tonic_chord(key_root, mode, rng, duration=4)
+            elif function_state == "PD":
+                chord = pick_predominant_chord(key_root, mode, rng, duration=4)
+            elif function_state == "D":
+                chord = pick_dominant_chord(key_root, mode, rng, duration=4)
+            else:
+                chord = pick_chromatic_chord(key_root, mode, rng, duration=4)
+            chords.append(chord)
+            function_state = choose_next_function(function_state, rng)
         bar += 1
     return chords
 
@@ -299,6 +361,7 @@ def add_notes_timeline(
     velocity: int,
     channel: int,
 ) -> None:
+    duration = ensure_min_duration(duration)
     for note in notes:
         timeline.append((start, 0, mido.Message("note_on", note=note, velocity=velocity, time=0, channel=channel)))
     for note in notes:
@@ -351,11 +414,11 @@ def build_tracks(events: List[ProgressionEvent], seed: int) -> mido.MidiFile:
         if pattern_roll < 0.4:
             add_notes_timeline(piano_timeline, current_tick, duration_ticks, voicing, velocity, channel=0)
         elif pattern_roll < 0.75:
-            half = duration_ticks // 2
+            half = ensure_min_duration(duration_ticks // 2)
             add_notes_timeline(piano_timeline, current_tick, half, voicing, velocity, channel=0)
             add_notes_timeline(piano_timeline, current_tick + half, half, voicing, velocity - 10, channel=0)
         else:
-            step = duration_ticks // 4
+            step = ensure_min_duration(duration_ticks // 4)
             for step_index in range(4):
                 note = [rng.choice(voicing)]
                 add_notes_timeline(piano_timeline, current_tick + step_index * step, step, note, velocity - 15, channel=0)
@@ -368,7 +431,7 @@ def build_tracks(events: List[ProgressionEvent], seed: int) -> mido.MidiFile:
         pad_notes = choose_pad_notes(chord)
         add_notes_timeline(pad_timeline, current_tick, duration_ticks, pad_notes, rng.randint(50, 85), channel=2)
 
-        drum_step = duration_ticks // 2
+        drum_step = ensure_min_duration(duration_ticks // 2)
         add_notes_timeline(drum_timeline, current_tick, drum_step, [42], 60, channel=9)
         add_notes_timeline(drum_timeline, current_tick + drum_step, drum_step, [42], 55, channel=9)
         add_notes_timeline(drum_timeline, current_tick, duration_ticks, [36], 80, channel=9)
