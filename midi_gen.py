@@ -17,7 +17,6 @@ TICKS_PER_BEAT = 480
 BPM = 120
 BARS = 90
 BEATS_PER_BAR = 4
-DEFAULT_SEED = 42
 DEFAULT_KEY = "C"
 DEFAULT_MODE = "major"
 
@@ -410,7 +409,12 @@ def progression_to_json(events: List[ProgressionEvent], seed: int, key: str, mod
 def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate a rich pop/jazz MIDI file.")
     parser.add_argument("--out", type=Path, default=Path("output.mid"), help="Output .mid path")
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="Random seed")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed (omit for new random output each run)",
+    )
     parser.add_argument("--key", type=str, default=DEFAULT_KEY, help="Key (e.g., C, Db, F#)")
     parser.add_argument("--mode", type=str, default=DEFAULT_MODE, choices=["major", "minor"], help="Mode")
     return parser.parse_args(argv)
@@ -420,17 +424,19 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parse_args(argv)
     if args.key not in NOTE_TO_PC:
         raise SystemExit(f"Unsupported key: {args.key}")
+    seed = args.seed if args.seed is not None else random.SystemRandom().randint(0, 2**31 - 1)
     key_root = NOTE_TO_PC[args.key]
-    events = generate_progression(key_root, args.mode, args.seed)
+    events = generate_progression(key_root, args.mode, seed)
     total_beats = sum(event.chord.duration_beats for event in events)
     expected_beats = BARS * BEATS_PER_BAR
     if total_beats != expected_beats:
         raise SystemExit(f"Progression length mismatch: {total_beats} beats (expected {expected_beats})")
     render_log(events)
-    midi = build_tracks(events, args.seed)
+    midi = build_tracks(events, seed)
     midi.save(args.out)
     progression_path = args.out.with_suffix(".progression.json")
-    progression_path.write_text(json.dumps(progression_to_json(events, args.seed, args.key, args.mode), indent=2))
+    progression_path.write_text(json.dumps(progression_to_json(events, seed, args.key, args.mode), indent=2))
+    print(f"Seed: {seed}")
     print(f"Wrote MIDI: {args.out}")
     print(f"Saved progression: {progression_path}")
     return 0

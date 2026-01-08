@@ -25,3 +25,5 @@ Outputs:
 Use `colab_midi_generator.ipynb` and run the cells top-to-bottom. The notebook installs
 `mido`, runs the generator inline (no external files needed), and lets you download
 `output.mid`.
+
+Omit `--seed` (or leave the notebook seed unset) to get a different arrangement each run.
