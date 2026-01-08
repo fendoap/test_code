@@ -251,6 +251,7 @@ def pick_predominant_chord(key_root: int, mode: str, rng: random.Random, duratio
         build_chord("ii", diatonic_degree(key_root, 2, mode), "m7b5", ["11"], ["PD"], duration),
         borrowed_chord(key_root, "iv", (key_root + 5) % 12, "m7", duration),
         borrowed_chord(key_root, "bVI", (key_root + 8) % 12, "maj7", duration),
+        borrowed_chord(key_root, "bII", (key_root + 1) % 12, "maj7", duration),
     ]
     return rng.choice(options)
 
@@ -262,6 +263,7 @@ def pick_dominant_chord(key_root: int, mode: str, rng: random.Random, duration: 
         build_chord("V", diatonic_degree(key_root, 5, mode), "7", ["b9", "#9"], ["D", "ALT"], duration),
         secondary_dominant(key_root, target_degree, mode, altered=rng.random() < 0.7, duration=duration),
         tritone_sub(key_root, target_degree, mode, duration=duration),
+        borrowed_chord(key_root, "bVII", (key_root + 10) % 12, "7", duration),
     ]
     return rng.choice(options)
 
@@ -272,6 +274,7 @@ def pick_chromatic_chord(key_root: int, mode: str, rng: random.Random, duration:
         borrowed_chord(key_root, "bIII", (key_root + 3) % 12, "maj7", duration),
         borrowed_chord(key_root, "bVI", (key_root + 8) % 12, "maj7", duration),
         dim_passing(key_root, "#ivo7", (key_root + 6) % 12, duration),
+        build_chord("bII", (key_root + 1) % 12, "maj7", ["9"], ["CT", "BORROW"], duration),
     ]
     return rng.choice(options)
 
@@ -307,6 +310,16 @@ def generate_section(
                 chord = pick_dominant_chord(key_root, mode, rng, duration=4)
             else:
                 chord = pick_chromatic_chord(key_root, mode, rng, duration=4)
+            if section in {"Intro", "Outro"} and rng.random() < 0.4:
+                chord = build_chord(
+                    chord.roman,
+                    chord.root_pc,
+                    chord.quality,
+                    chord.tensions,
+                    list(chord.tags) + ["PEDAL"],
+                    chord.duration_beats,
+                    bass_pc=key_root,
+                )
             chords.append(chord)
             function_state = choose_next_function(function_state, rng)
         bar += 1
@@ -404,7 +417,7 @@ def build_tracks(events: List[ProgressionEvent], seed: int) -> mido.MidiFile:
     prev_voicing: List[int] | None = None
     current_tick = 0
 
-    for event in events:
+    for idx, event in enumerate(events):
         chord = event.chord
         duration_ticks = chord.duration_beats * TICKS_PER_BEAT
         voicing = choose_voicing(chord, prev_voicing)
@@ -426,7 +439,25 @@ def build_tracks(events: List[ProgressionEvent], seed: int) -> mido.MidiFile:
         bass_pc = chord.bass_pc if chord.bass_pc is not None else chord.root_pc
         bass_note = midi_note(bass_pc, 2)
         bass_note = clamp(bass_note, 28, 48)
-        add_notes_timeline(bass_timeline, current_tick, duration_ticks, [bass_note], rng.randint(60, 95), channel=1)
+        next_root = chord.root_pc
+        if idx + 1 < len(events):
+            next_chord = events[idx + 1].chord
+            next_root = next_chord.bass_pc if next_chord.bass_pc is not None else next_chord.root_pc
+        if rng.random() < 0.4 and duration_ticks >= MIN_NOTE_TICKS * 2:
+            half = ensure_min_duration(duration_ticks // 2)
+            add_notes_timeline(bass_timeline, current_tick, half, [bass_note], rng.randint(60, 95), channel=1)
+            approach_pc = (next_root + (1 if rng.random() < 0.5 else -1)) % 12
+            approach_note = clamp(midi_note(approach_pc, 2), 28, 48)
+            add_notes_timeline(
+                bass_timeline,
+                current_tick + half,
+                duration_ticks - half,
+                [approach_note],
+                rng.randint(60, 95),
+                channel=1,
+            )
+        else:
+            add_notes_timeline(bass_timeline, current_tick, duration_ticks, [bass_note], rng.randint(60, 95), channel=1)
 
         pad_notes = choose_pad_notes(chord)
         add_notes_timeline(pad_timeline, current_tick, duration_ticks, pad_notes, rng.randint(50, 85), channel=2)
