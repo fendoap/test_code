@@ -159,6 +159,11 @@ int main(void)
 
   memset(txBuf, 0, sizeof(txBuf));
   memset(rxBuf, 0, sizeof(rxBuf));
+
+  /* Reset SGTL5000 codec before configuring registers */
+  HAL_GPIO_WritePin(CODEC_RST_GPIO_Port, CODEC_RST_Pin, GPIO_PIN_RESET);
+  HAL_Delay(10);
+  HAL_GPIO_WritePin(CODEC_RST_GPIO_Port, CODEC_RST_Pin, GPIO_PIN_SET);
   HAL_Delay(5);
 
   // VDDD内部生成（3.1V以下想定、低電圧起動手順）
