@@ -20,10 +20,8 @@ Outputs:
 - `output.mid`
 - `output.progression.json` (chord progression and tags for verification)
 
-## Colab
+## Colab (All-in-One Notebook)
 
-Use `colab_midi_generator.ipynb`, then run the cells in order to:
-
-1. Install dependencies
-2. Generate `output.mid`
-3. Download the file
+Use `colab_midi_generator.ipynb` and run the cells top-to-bottom. The notebook installs
+`mido`, runs the generator inline (no external files needed), and lets you download
+`output.mid`.
